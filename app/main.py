@@ -2,39 +2,35 @@ import socket  # noqa: F401
 import struct
 from typing import Tuple
 
-BYTE = bytes(1)
+TAG_BUFFER = b'\x00'
 
 
-def construct_header_line(data: bytes):
-    """
-        Struct format codes:
-        i: int              - 4 bytes
-        h: short int        - 2 bytes
-        b: signed char/int  - 1 byte
-
-    """
-    assert len(data) == 12
+def construct_header_line(data: bytes) -> bytes:
+    try:
+        assert len(data) == 12
+    except AssertionError as e:
+        print(e)
     message_size, api_key, api_version, correlation_id = struct.unpack('>ihhI', data)
-    api_min_version = 0
-    api_max_version = 4
-    error_code = 0 if api_min_version <= api_version <= api_max_version else 0
-    # return struct.pack('>iihb', message_size, correlation_id, error_code, api_key, api_version)
-    return struct.pack('>2ihb3h', message_size, correlation_id, error_code, 3, api_key, api_min_version, api_max_version)
+    api_min_version, api_max_version = 0, 4
+    error_code = 0 if api_min_version <= api_version <= api_max_version else 35
+    message = bytearray(correlation_id.to_bytes(4, byteorder='big'))
+    message += error_code.to_bytes(2, byteorder='big')
+    message += int(2).to_bytes(1, byteorder='big') # Array lenght needs to include message?
+    message += api_key.to_bytes(2, byteorder='big')
+    message += api_min_version.to_bytes(2, byteorder='big')
+    message += api_max_version.to_bytes(2, byteorder='big')
+    message += TAG_BUFFER
+    message += int(0).to_bytes(4, byteorder='big') # Throttle Time ms
+    message += TAG_BUFFER
+    message_leng = bytearray(len(message).to_bytes(4, byteorder='big'))
+    return message_leng + message
 
 
 def main():
-    # You can use print statements as follows for debugging,
-    # they'll be visible when running tests.
     print("Logs from your program will appear here!")
-    # Uncomment this to pass the first stage
-    #
     server = socket.create_server(("localhost", 9092))
     sock, addr = server.accept() # wait for client
     data = sock.recv(1024)
-    # print('raw data: ', data)
-    
-    # print(message_size, api_key, api_version, correlation_id)
-    
     header = construct_header_line(data[:12])
     sock.sendall(header)
 
