@@ -5,11 +5,21 @@ from typing import Tuple
 BYTE = bytes(1)
 
 
-def construct_header_line(message_size:int, corr_id: int, error_code: int = 0):
-    # message_size = BYTE * 8
-    # correlation_id_bytes = corr_id.to_bytes(8, byteorder='big')
-    # return [message_size, correlation_id_bytes]
-    return struct.pack('>iih', message_size, corr_id, error_code)
+def construct_header_line(data: bytes):
+    """
+        Struct format codes:
+        i: int              - 4 bytes
+        h: short int        - 2 bytes
+        b: signed char/int  - 1 byte
+
+    """
+    assert len(data) == 12
+    message_size, api_key, api_version, correlation_id = struct.unpack('>ihhI', data)
+    api_min_version = 0
+    api_max_version = 4
+    error_code = 0 if api_min_version <= api_version <= api_max_version else 0
+    # return struct.pack('>iihb', message_size, correlation_id, error_code, api_key, api_version)
+    return struct.pack('>2ihb3h', message_size, correlation_id, error_code, 3, api_key, api_min_version, api_max_version)
 
 
 def main():
@@ -22,13 +32,10 @@ def main():
     sock, addr = server.accept() # wait for client
     data = sock.recv(1024)
     # print('raw data: ', data)
-    message_size, api_key, api_version, correlation_id = struct.unpack('>ihhI', data[:12])
+    
     # print(message_size, api_key, api_version, correlation_id)
-    if not 0 <= api_version <= 4:
-        error_code = 35
-    else:
-        error_code = 0
-    header = construct_header_line(4, correlation_id, error_code)
+    
+    header = construct_header_line(data[:12])
     sock.sendall(header)
 
 
