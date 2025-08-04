@@ -15,7 +15,7 @@ def construct_header_line(data: bytes) -> bytes:
     error_code = 0 if api_min_version <= api_version <= api_max_version else 35
     message = bytearray(correlation_id.to_bytes(4, byteorder='big'))
     message += error_code.to_bytes(2, byteorder='big')
-    message += int(2).to_bytes(1, byteorder='big') # Array lenght needs to include message?
+    message += int(2).to_bytes(1, byteorder='big') # Array length is n + 1
     message += api_key.to_bytes(2, byteorder='big')
     message += api_min_version.to_bytes(2, byteorder='big')
     message += api_max_version.to_bytes(2, byteorder='big')
@@ -30,9 +30,12 @@ def main():
     print("Logs from your program will appear here!")
     server = socket.create_server(("localhost", 9092))
     sock, addr = server.accept() # wait for client
-    data = sock.recv(1024)
-    header = construct_header_line(data[:12])
-    sock.sendall(header)
+    while True:
+        data = sock.recv(1024)
+        if not data:
+            break
+        header = construct_header_line(data[:12])
+        sock.sendall(header)
 
 
 if __name__ == "__main__":
