@@ -68,7 +68,7 @@ def create_response(req: KafkaRequest) -> KafkaResponse:
     if response_type := RESPONSE_TYPES[req.api_key]:
         response = response_type(req)
         print(f'Api Type: {type(response)}; Request API Version: {req.api_version}; API Min Version: {response.MIN_VERSION}; API Max Version: {response.MAX_VERSION};')
-        if not response_type.MIN_VERSION < req.api_version < response_type.MAX_VERSION:
+        if not response_type.MIN_VERSION <= req.api_version <= response_type.MAX_VERSION:
             response.error_code = 35
         print(f'Error Code: {response.error_code}')
         return response
