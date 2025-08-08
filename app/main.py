@@ -1,6 +1,9 @@
 import socket  # noqa: F401
 import struct
 import codecs
+import json
+from encodings import aliases
+import quopri
 from abc import ABC
 from threading import Thread
 from typing import Tuple, Callable
@@ -9,6 +12,112 @@ from collections import namedtuple
 
 TAG_BUFFER = b'\x00'
 NULL_TOPIC_ID = bytes(16)
+CLUSTER_METADATA_FILE = '/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log'
+
+
+def advance_cursors(cur_end:int, incr: int) -> tuple[int, int]:
+    return (cur_end, cur_end + incr)
+
+with codecs.open('/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log', 'r', 'quopri_codec') as f:
+    data = f.read()
+
+with open('/tmp/kraft-combined-logs/__cluster_metadata-0/partition.metadata', 'r') as f:
+    print('partition.metadata file: ', f.read())
+    
+metadata_records = []
+cur_end, batch_length = 0, 999
+while data:
+    cur_beg, cur_end = 0, 61
+    base_offset, batch_length, part_leader_epoch, magic_byte, crc, attrs, last_offset_delta, base_ts, max_ts, producer_id, producer_epoch, base_seq, records_length_count = struct.unpack('>qiibihiqqqhii', data[cur_beg:cur_end]) # type: ignore
+    print('base_offset', 'batch_length', 'part_leader_epoch', 'magic_byte', 'crc', 'attrs', 'last_offset_delta', 'base_ts', 'max_ts', 'producer_id', 'producer_epoch', 'base_seq', 'records_length_count')
+    print(base_offset, batch_length, part_leader_epoch, magic_byte, crc, attrs, last_offset_delta, base_ts, max_ts, producer_id, producer_epoch, base_seq, records_length_count)
+    # print(len(data))
+    print(base_offset, batch_length, producer_id, records_length_count)
+    # cur_beg = cur_end
+    # cur_end += 1
+    print(data[0:61])
+    print(data[61:75])
+    cur_beg, cur_end = advance_cursors(cur_end, 1)
+    print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+    length_of_record = struct.unpack('>b', data[cur_beg:cur_end])[0] # type: ignore
+    print('length_of_record:', length_of_record)
+    cur_beg, cur_end = advance_cursors(cur_end, 4)
+    # print(struct.unpack('>bbbb', data[cur_beg:cur_beg+4]))
+    print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+    attrs, ts_delta, offset_delta, key_length = struct.unpack('>bbbb', data[cur_beg:cur_end]) # type: ignore
+    print('attrs', 'ts_delta', 'offset_delta', 'key_length')
+    print(attrs, ts_delta, offset_delta, key_length)
+    cur_beg = cur_end
+    # print('Num Records: ', records_length_count)
+    for record in range(records_length_count):
+        # Key Parsing
+        if key_length-1 > 0:
+            cur_end += key_length
+            # key = struct.unpack(f'>{key_length}s', data[cur_beg:cur_end]) # type: ignore
+            print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+            key = struct.unpack(f'>{key_length}b', data[cur_beg:cur_end])[0] # type: ignore
+            print('key:', key)
+        cur_beg, cur_end = advance_cursors(cur_end, 4)
+        # Value Parsing
+        # value_length = struct.unpack('>b', data[cur_beg:cur_end]) # type: ignore
+        print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+        value_length, frame_version, record_type, version = struct.unpack('>4b', data[cur_beg:cur_end]) # type: ignore
+        print('value_length', 'frame_version', 'record_type', 'version')
+        print(value_length, frame_version, record_type, version)
+        if record_type == 12: # Feature Level Record
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            name_length = struct.unpack('>b', data[cur_beg:cur_end])[0] # type: ignore
+            print('name_length: ', name_length)
+            cur_beg, cur_end = advance_cursors(cur_end, name_length+3)
+            print(cur_end - cur_beg)
+            print('name_length:',  name_length)
+            print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+            name, feature_level, tagged_fields_count, headers_array_count = struct.unpack(f'>{name_length-1}shbb', data[cur_beg:cur_end]) # type: ignore
+            print(name, feature_level, tagged_fields_count, headers_array_count)
+            metadata_records.append(name.decode())
+        elif record_type == 2: # Topic Record
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            name_length = struct.unpack('>b', data[cur_beg:cur_end])[0] # type: ignore
+            print('name_length: ', name_length)
+            name_length -= 1
+            cur_beg, cur_end = advance_cursors(cur_end, name_length+17)
+            print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+            topic_name, topic_uuid, tagged_fields_count = struct.unpack(f'>{name_length}s16sb', data[cur_beg:cur_end]) # type: ignore
+        elif record_type == 3: # Partition Record
+            cur_beg, cur_end = advance_cursors(cur_end, 21)
+            partition_id, topic_uuid, replica_array_length = struct.unpack(f'>i16sb', data[cur_beg:cur_end]) # type: ignore
+            replica_array_length -= 1 # The actual length is 1 less than the number bc it's a compact array
+            cur_beg, cur_end = advance_cursors(cur_end, 4*replica_array_length)
+            replicas = struct.unpack(f'>{replica_array_length}i', data[cur_beg:cur_end]) # type: ignore
+
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            in_sync_replica_array_length = struct.unpack(f'>b', data[cur_beg:cur_end])[0] # type: ignore
+            in_sync_replica_array_length -= 1 # The actual length is 1 less than the number bc it's a compact array
+            cur_beg, cur_end = advance_cursors(cur_end, 4*in_sync_replica_array_length)
+            in_sync_replicas = struct.unpack(f'>{in_sync_replica_array_length}i', data[cur_beg:cur_end]) # type: ignore
+            
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            removing_replicas_array_length = struct.unpack(f'>b', data[cur_beg:cur_end])[0] # type: ignore
+            removing_replicas_array_length -= 1 # The actual length is 1 less than the number bc it's a compact array
+            cur_beg, cur_end = advance_cursors(cur_end, 4*removing_replicas_array_length)
+            removing_replicas = struct.unpack(f'>{removing_replicas_array_length}i', data[cur_beg:cur_end]) # type: ignore
+
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            adding_replica_array_length = struct.unpack(f'>b', data[cur_beg:cur_end])[0] # type: ignore
+            adding_replica_array_length -= 1 # The actual length is 1 less than the number bc it's a compact array
+            cur_beg, cur_end = advance_cursors(cur_end, 4*adding_replica_array_length)
+            adding_replicas = struct.unpack(f'>{adding_replica_array_length}i', data[cur_beg:cur_end]) # type: ignore
+
+            cur_beg, cur_end = advance_cursors(cur_end, 13)
+            replica_leader_id, leader_epoch, partition_epoch, directories_array_length = struct.unpack(f'>3ib', data[cur_beg:cur_end]) # type: ignore
+            directories_array_length -= 1 # The actual length is 1 less than the number bc it's a compact array
+            cur_beg, cur_end = advance_cursors(cur_end, 16*directories_array_length)
+            directories = struct.unpack(f'>{"16s"*directories_array_length}', data[cur_beg:cur_end]) # type: ignore
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            tagged_fields_count = struct.unpack(f'>b', data[cur_beg:cur_end])[0] # type: ignore
+
+        data = data[cur_end:]
+print(metadata_records)
 
 topics = {'NULL': NULL_TOPIC_ID}
 
@@ -83,7 +192,7 @@ class KafkaDescribePartitionsRequest(KafkaRequest):
             cur_end += topic_name_leng
             # print(cur_beg, cur_end)
             topic_name = struct.unpack(f'>{topic_name_leng-1}sx', req_bytes[cur_beg:cur_end])[0].decode()
-            print(topic_name)
+            # print(topic_name)
             # print('Topic Name:', topic_name)
             self.request_topics.append(topic_name)
         cur_beg = cur_end
@@ -154,7 +263,6 @@ class KafkaDescribeTopicPartitionsResponse(KafkaResponse):
         for topic_name, error_code in self.topic_errors.items():
             topic_description = bytearray(error_code.to_bytes(2, byteorder='big'))
             topic_description += int(len(topic_name)+1).to_bytes(1, byteorder='big')
-            print(topic_name)
             topic_description += topic_name.encode('utf-8')
             topic_id = topics[topic_name] if topics.get(topic_name) else NULL_TOPIC_ID
             topic_description += topic_id
@@ -168,7 +276,7 @@ class KafkaDescribeTopicPartitionsResponse(KafkaResponse):
         message += TAG_BUFFER
         message_leng = bytearray(len(message).to_bytes(4, byteorder='big'))
         ret_message = message_leng + message 
-        print(ret_message)
+        # print(ret_message)
         return ret_message
 
 
@@ -203,7 +311,6 @@ def create_response(req: KafkaRequest) -> KafkaResponse:
 
 def request_parser(data:bytes) -> KafkaRequest:
     api_version = int(struct.unpack('>h', data[4:6])[0])
-    print(api_version)
     if api_type := API_TYPES.get(api_version):
         return api_type.request(data)
     else:
