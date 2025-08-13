@@ -193,8 +193,8 @@ while data:
             exit()
         cur_beg, cur_end = advance_cursors(cur_end, 1)
     data = data[cur_beg:]
-print(topics)
-print(topic_names_by_uuid)
+# print(topics)
+# print(topic_names_by_uuid)
 """
     API Version Request Header:
         - API Key
@@ -327,7 +327,7 @@ class KafkaDescribeTopicPartitionsResponse(KafkaResponse):
             topic_description += int(len(topic_name)+1).to_bytes(1, byteorder='big') # Needs to be encoded as varint
             topic_description += topic_name.encode('utf-8')
             topic_id = topics[topic_name]['id'] if topics.get(topic_name) else NULL_TOPIC_ID
-            print('topic_id ', topic_id)
+            # print('topic_id ', topic_id)
             topic_description += topic_id
             topic_description += False.to_bytes(1)
             if error_code == 3:
@@ -374,7 +374,7 @@ class KafkaDescribeTopicPartitionsResponse(KafkaResponse):
         message += TAG_BUFFER
         message_leng = bytearray(len(message).to_bytes(4, byteorder='big'))
         ret_message = message_leng + message 
-        print(ret_message.hex())
+        # print(ret_message.hex())
         return ret_message
     
 class KafkaDescribeTopicPartitionsUnknownTopicResponse(KafkaResponse):
@@ -462,7 +462,6 @@ def handle(sock: socket.socket):
 
 
 def main():
-    print("Logs from your program will appear here!")
     server = socket.create_server(("localhost", 9092))
     try:
         while True:
