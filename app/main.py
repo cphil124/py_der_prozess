@@ -231,6 +231,9 @@ class KafkaRequest(ABC):
         self.client_name = ''
         self.error_code = 0
 
+class KafkaFetchRequest(KafkaRequest):
+    pass
+
 class KafkaApiVersionRequest(KafkaRequest):
     pass
 
@@ -287,6 +290,12 @@ class KafkaResponse(ABC):
     
     def construct_response_message(self) -> bytes:
         return b''
+    
+
+class KafkaFetchResponse(KafkaResponse):
+    API_KEY = 1
+    MIN_VERSION = 0
+    MAX_VERSION = 16
 
 class KafkaAPIVersionsResponse(KafkaResponse):
     API_KEY = 18
@@ -390,7 +399,9 @@ class ApiType:
 
 API_TYPES = {
     18: ApiType(18, KafkaApiVersionRequest, KafkaAPIVersionsResponse, 0, 4),
-    75: ApiType(75, KafkaDescribePartitionsRequest, KafkaDescribeTopicPartitionsResponse, 0, 0)
+    75: ApiType(75, KafkaDescribePartitionsRequest, KafkaDescribeTopicPartitionsResponse, 0, 0),
+    1: ApiType(1, KafkaFetchRequest, KafkaFetchResponse, 0, 16)
+
 }
 
 #TODO: Decouple from KafkaRequest
