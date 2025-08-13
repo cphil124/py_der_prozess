@@ -1,3 +1,4 @@
+import io
 import socket  # noqa: F401
 import struct
 import codecs
@@ -15,6 +16,45 @@ NULL_BYTE = int(255).to_bytes(1)
 NULL_TOPIC_ID = bytes(16)
 CLUSTER_METADATA_FILE = '/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log'
 
+
+class RecordTypeFormat(ABC):
+    pass
+
+class FeatureLevelFormat(RecordTypeFormat):
+    pass
+
+class TopicRecordFormat(RecordTypeFormat):
+    pass
+
+class PartitionRecordFormat(RecordTypeFormat):
+    pass
+
+class BytesReader(ABC):
+    FORMAT = 'b'
+    SUBRECORD_FORMATS = {} # Type ID(int) : RecordTypeFormat
+    def __init__(self, byte_stream: io.TextIOWrapper):
+        self.byte_stream = byte_stream
+        self.cur_beg = 0
+        self.cur_end = 0
+
+    def advance_cursors(self, new_beginning:int, interval_length: int) -> None:
+        self.cur_beg = new_beginning
+        self.cur_end = new_beginning + interval_length
+
+    def decode_batch(self):
+        pass
+
+    def decode_varlength_string(self):
+        pass
+
+    def decode_array(self):
+        pass
+
+    def decode_record(self):
+        pass
+
+    def decode_uuid(self):
+        pass
 
 def advance_cursors(new_beginning:int, interval_length: int) -> tuple[int, int]:
     return (new_beginning, new_beginning + interval_length)
