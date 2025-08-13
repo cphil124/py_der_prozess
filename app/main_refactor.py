@@ -29,17 +29,20 @@ class TopicRecordFormat(RecordTypeFormat):
 class PartitionRecordFormat(RecordTypeFormat):
     pass
 
-class BytesReader(ABC):
+class BytesParser(ABC):
     FORMAT = 'b'
     SUBRECORD_FORMATS = {} # Type ID(int) : RecordTypeFormat
-    def __init__(self, byte_stream: io.TextIOWrapper):
-        self.byte_stream = byte_stream
+    def __init__(self, byte_stream: io.BytesIO):
+        self.data: bytes = byte_stream.read()
         self.cur_beg = 0
         self.cur_end = 0
 
     def advance_cursors(self, new_beginning:int, interval_length: int) -> None:
         self.cur_beg = new_beginning
         self.cur_end = new_beginning + interval_length
+
+    def decode_header(self):
+        pass
 
     def decode_batch(self):
         pass

@@ -237,31 +237,32 @@ class KafkaApiVersionRequest(KafkaRequest):
 class KafkaDescribePartitionsRequest(KafkaRequest):
     def __init__(self, req_bytes: bytes):
         cur_beg, cur_end = 0, 12
+        print(req_bytes)
         super().__init__(req_bytes=req_bytes[cur_beg:cur_end])
         self.request_topics = []
 
         cur_beg, cur_end = advance_cursors(cur_end, 2)
         content_length = int(struct.unpack('>h', req_bytes[cur_beg:cur_end])[0])
+        print('content length', content_length)
         
-        # print('content length', content_length)
         cur_beg, cur_end = advance_cursors(cur_end, content_length+1)
         self.client_name = struct.unpack(f'>{content_length}sx', req_bytes[cur_beg:cur_end])[0].decode()
-        # print(self.client_name)
+        print(self.client_name)
 
         cur_beg, cur_end = advance_cursors(cur_end, 1)
         array_length, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:]))
         cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, 1)
-        # print(array_length)
+        print(array_length)
 
         for i in range(array_length-1):
             topic_name_leng, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:]))
             cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, topic_name_leng)
-            # print('topic_name_leng', topic_name_leng)
-            # print(cur_beg, cur_end)
+            print('topic_name_leng', topic_name_leng, ' incr_amount', incr_amt)
+            print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
             topic_name = struct.unpack(f'>{topic_name_leng-1}sx', req_bytes[cur_beg:cur_end])[0]
-            # print(topic_name)
-            # print('Topic Name:', topic_name)
+            print('Topic Name:', topic_name)
             self.request_topics.append(topic_name.decode())
+            cur_beg, cur_end = advance_cursors(cur_end, 0)
         cur_beg, cur_end = advance_cursors(cur_end, 6)
         # print(cur_beg, cur_end, len(req_bytes[cur_beg:]), req_bytes[cur_beg:])
         self.response_limit, page_cursor = struct.unpack('>ibx', req_bytes[cur_beg:cur_end])
@@ -376,43 +377,6 @@ class KafkaDescribeTopicPartitionsResponse(KafkaResponse):
         ret_message = message_leng + message 
         # print(ret_message.hex())
         return ret_message
-    
-class KafkaDescribeTopicPartitionsUnknownTopicResponse(KafkaResponse):
-    API_KEY = 75
-    MIN_VERSION = 0
-    MAX_VERSION = 0
-
-    def __init__(self, req: KafkaDescribePartitionsRequest):
-        super().__init__(req)
-        self.requested_topics = req.request_topics
-        self.topic_errors = {topic: (0 if topic in topics else 3)  for topic in req.request_topics}
-        self.response_limit = req.response_limit
-            
-    # @response_wrapper
-    def construct_response_message(self) -> bytes:
-        message = bytearray(self.correlation_id.to_bytes(4, byteorder='big'))
-        message += TAG_BUFFER
-        message += bytes(4) # Throttle Time
-        message += int(len(self.requested_topics)+1).to_bytes(1, byteorder='big') # Needs to be encoded as varint
-        for topic_name, error_code in self.topic_errors.items():
-            topic_description = bytearray(error_code.to_bytes(2, byteorder='big'))
-            topic_description += int(len(topic_name)+1).to_bytes(1, byteorder='big') # Needs to be encoded as varint
-            topic_description += topic_name.encode('utf-8')
-            topic_id = topics[topic_name]['id'] if topics.get(topic_name) else NULL_TOPIC_ID
-            topic_description += topic_id
-            topic_description += TAG_BUFFER
-            partitions_array_length = len(topics[topic_name]['partitions'])
-            topic_description += partitions_array_length.to_bytes(1, byteorder='big')
-            topic_description += bytes(4)
-            topic_description += TAG_BUFFER
-            message += topic_description
-        message += NULL_BYTE
-        message += TAG_BUFFER
-        message_leng = bytearray(len(message).to_bytes(4, byteorder='big'))
-        ret_message = message_leng + message 
-        # print(ret_message)
-        return ret_message
-
 
 #TODO: Refactor to have a catalog of some sort. Extract the version min/max from the response, and decouple the request from the response.
 class ApiType:
@@ -442,7 +406,7 @@ def create_response(req: KafkaRequest) -> KafkaResponse:
         return KafkaResponse(req)
     
 
-def request_parser(data:bytes) -> KafkaRequest:
+def request_parser(data: bytes) -> KafkaRequest:
     api_version = int(struct.unpack('>h', data[4:6])[0])
     if api_type := API_TYPES.get(api_version):
         return api_type.request(data)
