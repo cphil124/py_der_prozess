@@ -383,6 +383,13 @@ class KafkaResponse(ABC):
         ver_arr += bytearray(cls.MAX_VERSION.to_bytes(2, byteorder='big'))
         return ver_arr
     
+    def construct_response_w_header_footer(self) -> bytes:
+        message = bytearray(self.correlation_id.to_bytes(4, byteorder='big'))
+        message += TAG_BUFFER
+        message += self.construct_response_message()
+        message_len = len(message).to_bytes(4, byteorder='big')
+        return message_len + message
+
     def construct_response_message(self) -> bytes:
         return b''
     
@@ -421,8 +428,8 @@ class KafkaFetchResponse(KafkaResponse):
         """
         print('Correlation ID:', self.correlation_id.to_bytes(4, byteorder='big'))
         message = bytearray(self.correlation_id.to_bytes(4, byteorder='big'))
-        message += int(0).to_bytes(4, byteorder='big')
         message += TAG_BUFFER
+        message += int(0).to_bytes(4, byteorder='big')
         print('Error Code: ', self.error_code, self.error_code.to_bytes(2, byteorder='big'))
         message += self.error_code.to_bytes(2, byteorder='big')
         message += self.session_id.to_bytes(4, byteorder='big')
