@@ -17,6 +17,12 @@ NULL_TOPIC_ID = bytes(16)
 CLUSTER_METADATA_FILE = '/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log'
 
 
+REQUEST_FORMATS = {
+    'v0': None,
+    'v1': None,
+    'v2': None
+}
+
 class RecordTypeFormat(ABC):
     pass
 
@@ -41,9 +47,11 @@ class BytesParser(ABC):
         self.cur_beg = new_beginning
         self.cur_end = new_beginning + interval_length
 
-    def decode_header(self):
-        pass
-
+    def decode_header(self) -> tuple[int, int, int, int]:
+        # Read message size, correlation_id, tag_buffer
+        self.advance_cursors(12, 1)
+        return struct.unpack('>ihhI', self.data[0:12])
+    
     def decode_batch(self):
         pass
 

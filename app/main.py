@@ -15,6 +15,14 @@ NULL_BYTE = int(255).to_bytes(1)
 NULL_TOPIC_ID = bytes(16)
 CLUSTER_METADATA_FILE = '/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log'
 
+# with open('/tmp/kraft-combined-logs/foo-0/partition.metadata', 'rb') as f:
+#     print(f.read())
+
+# with open('/tmp/kraft-combined-logs/foo-0/00000000000000000000.log', 'rb') as f:
+#     print(f.read())
+
+def debug_cursor(data: bytes, cur_beg: int, cur_end: int):
+    print('Cursors: ', cur_beg, cur_end, data[cur_beg: cur_end], data[cur_beg-2: cur_end+2])
 
 def advance_cursors(new_beginning:int, interval_length: int) -> tuple[int, int]:
     return (new_beginning, new_beginning + interval_length)
@@ -52,6 +60,10 @@ def decode_signed_beb128(byte_array: bytearray) -> tuple[int, int]:
 with codecs.open(CLUSTER_METADATA_FILE, 'r', 'quopri_codec') as f:
     data = f.read()
 
+
+def encode_compact_string(string: str) -> bytes:
+    str_length = len(string) + 1
+    return struct.pack('>b', str_length) + struct.pack(f'>{str_length-1}s', string.encode())
 
 topics = {}
 topic_names_by_uuid = {}
@@ -227,12 +239,96 @@ def response_wrapper(func: Callable, *args, **kwargs) -> Callable:
 class KafkaRequest(ABC):
     def __init__(self, req_bytes: bytes):
         self.message_size, self.api_key, self.api_version, self.correlation_id = struct.unpack('>ihhI', req_bytes[0:12])
-        # print('Message Received', self.message_size, self.api_key, self.api_version, self.correlation_id)
+        print(list(zip(['message_size', 'api_key', 'api_version', 'correlation_id'], [self.message_size, self.api_key, self.api_version, self.correlation_id])))
         self.client_name = ''
         self.error_code = 0
 
 class KafkaFetchRequest(KafkaRequest):
-    pass
+    """
+    Fetch Request (Version: 16) => max_wait_ms min_bytes max_bytes isolation_level session_id session_epoch [topics] [forgotten_topics_data] rack_id _tagged_fields 
+    max_wait_ms => INT32
+    min_bytes => INT32
+    max_bytes => INT32
+    isolation_level => INT8
+    session_id => INT32
+    session_epoch => INT32
+    topics => topic_id [partitions] _tagged_fields 
+        topic_id => UUID
+        partitions => partition current_leader_epoch fetch_offset last_fetched_epoch log_start_offset partition_max_bytes _tagged_fields 
+        partition => INT32
+        current_leader_epoch => INT32
+        fetch_offset => INT64
+        last_fetched_epoch => INT32
+        log_start_offset => INT64
+        partition_max_bytes => INT32
+    forgotten_topics_data => topic_id [partitions] _tagged_fields 
+        topic_id => UUID
+        partitions => INT32
+    rack_id => COMPACT_STRING
+    """
+    def __init__(self, req_bytes: bytes):
+        print(req_bytes)
+        cur_beg, cur_end = 0, 12
+        super().__init__(req_bytes=req_bytes[cur_beg:cur_end])
+        self.reqd_topics = {}
+        cur_beg, cur_end = advance_cursors(cur_end, 21)
+        max_wait_ms, min_bytes, max_bytes, self.iso_lvl, self.session_id, self.session_epoch = struct.unpack('>3ib2i', req_bytes[cur_beg:cur_end])
+        # print(list(zip(['max_wait_ms', 'min_bytes', 'max_bytes', 'iso_lvl', 'session_id', 'session_epoch'], [max_wait_ms, min_bytes, max_bytes, self.iso_lvl, self.session_id, self.session_epoch])))
+
+        cur_beg, cur_end = advance_cursors(cur_end, 1)
+        topic_array_length, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:cur_end]))
+        # print('topic_array_length: ', topic_array_length, 'incr_amt', incr_amt)
+        # print('BEFORE TOPICS ARRAY')
+        # debug_cursor(req_bytes, cur_beg, cur_end)
+        cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, 0)
+        # print('BEFORE TOPICS ARRAY INCREMENTED')
+        # debug_cursor(req_bytes, cur_beg, cur_end)
+
+        for i in range(topic_array_length):
+            cur_beg, cur_end = advance_cursors(cur_end, 16)
+            topic_id = struct.unpack('>q', req_bytes[cur_beg:cur_end])
+            cur_beg, cur_end = advance_cursors(cur_end, 1)
+            partition_list = []
+            part_array_length, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:]))
+            cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, 0)
+            for i in range(part_array_length):
+                cur_beg, cur_end = advance_cursors(cur_end, 32)
+                partition_index, current_leader_epoch, fetch_offset, last_fetched_offset, log_start_offset, partition_max_bytes, tagged_fields_count = struct.unpack('>iiqiqi', req_bytes[cur_beg:cur_end])
+                part_dict = {
+                    'partition_index': partition_index,
+                    'current_leader_epoch': current_leader_epoch,
+                    'fetch_offset': fetch_offset,
+                    'last_fetched_offset': last_fetched_offset,
+                    'log_start_offset':log_start_offset,
+                    'partition_max_bytes': partition_max_bytes,
+                    'tagged_fields_count': tagged_fields_count
+                }
+                partition_list.append(part_dict)
+            cur_beg, cur_end = advance_cursors(cur_end, 0)
+        print('AFTER TOPICS ARRAY')
+        # debug_cursor(req_bytes, cur_beg, cur_end)
+        forgotten_topics_array_length, incr_amt = decode_signed_beb128(bytearray(req_bytes[cur_beg:]))
+        print('forgotten_topics_array_length: ', forgotten_topics_array_length, 'incr_amt', incr_amt)
+        cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, 0)
+        self.forget_topics = {}
+        for i in range(forgotten_topics_array_length):
+            cur_beg, cur_end = advance_cursors(cur_end, 12)
+            topic_id, partition = struct.unpack('>qi', req_bytes[cur_beg:cur_end])
+            if self.forget_topics.get(topic_id):
+                self.forget_topics[topic_id].append(partition)
+            else:
+                self.forget_topics[topic_id] = [partition]
+            cur_beg, cur_end = advance_cursors(cur_end, 0)
+        print('AFTER FORGOTTEN TOPICS ARRAY')
+        # debug_cursor(req_bytes, cur_beg, cur_end)
+        print(req_bytes[cur_beg:])
+        rack_id_length, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:]))
+        rack_id_length -= 1
+        cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, rack_id_length)
+        print('Rack ID Length: ', rack_id_length)
+        self.rack_id = struct.unpack(f'>{rack_id_length}s', req_bytes[cur_beg:cur_end])[0].decode()
+        print('Rack ID: ', self.rack_id)
+
 
 class KafkaApiVersionRequest(KafkaRequest):
     pass
@@ -240,30 +336,29 @@ class KafkaApiVersionRequest(KafkaRequest):
 class KafkaDescribePartitionsRequest(KafkaRequest):
     def __init__(self, req_bytes: bytes):
         cur_beg, cur_end = 0, 12
-        print(req_bytes)
         super().__init__(req_bytes=req_bytes[cur_beg:cur_end])
         self.request_topics = []
 
         cur_beg, cur_end = advance_cursors(cur_end, 2)
         content_length = int(struct.unpack('>h', req_bytes[cur_beg:cur_end])[0])
-        print('content length', content_length)
+        # print('content length', content_length)
         
         cur_beg, cur_end = advance_cursors(cur_end, content_length+1)
         self.client_name = struct.unpack(f'>{content_length}sx', req_bytes[cur_beg:cur_end])[0].decode()
-        print(self.client_name)
+        # print(self.client_name)
 
         cur_beg, cur_end = advance_cursors(cur_end, 1)
         array_length, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:]))
         cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, 1)
-        print(array_length)
+        # print(array_length)
 
         for i in range(array_length-1):
             topic_name_leng, incr_amt = decode_unsigned_beb128(bytearray(req_bytes[cur_beg:]))
             cur_beg, cur_end = advance_cursors(cur_beg+incr_amt, topic_name_leng)
-            print('topic_name_leng', topic_name_leng, ' incr_amount', incr_amt)
-            print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
+            # print('topic_name_leng', topic_name_leng, ' incr_amount', incr_amt)
+            # print('Cursors:', cur_beg, cur_end, data[cur_beg:cur_end])
             topic_name = struct.unpack(f'>{topic_name_leng-1}sx', req_bytes[cur_beg:cur_end])[0]
-            print('Topic Name:', topic_name)
+            # print('Topic Name:', topic_name)
             self.request_topics.append(topic_name.decode())
             cur_beg, cur_end = advance_cursors(cur_end, 0)
         cur_beg, cur_end = advance_cursors(cur_end, 6)
@@ -296,6 +391,64 @@ class KafkaFetchResponse(KafkaResponse):
     API_KEY = 1
     MIN_VERSION = 0
     MAX_VERSION = 16
+    def __init__(self, req: KafkaFetchRequest):
+        super().__init__(req)
+        self.session_id = req.session_id
+        self.reqd_topics = req.reqd_topics
+        self.forget_topics = req.forget_topics
+
+    def read_from_partition(self, topic_id: str, partition_id: int):
+        pass
+    def construct_response_message(self) -> bytes:
+        """
+            Fetch Response (Version: 16) => throttle_time_ms error_code session_id [responses] _tagged_fields 
+            throttle_time_ms => INT32
+            error_code => INT16
+            session_id => INT32
+            responses => topic_id [partitions] _tagged_fields 
+                topic_id => UUID
+                partitions => partition_index error_code high_watermark last_stable_offset log_start_offset [aborted_transactions] preferred_read_replica records _tagged_fields 
+                    partition_index => INT32
+                    error_code => INT16
+                    high_watermark => INT64
+                    last_stable_offset => INT64
+                    log_start_offset => INT64
+                    aborted_transactions => producer_id first_offset _tagged_fields 
+                        producer_id => INT64
+                        first_offset => INT64
+                    preferred_read_replica => INT32
+                    records => COMPACT_RECORDS
+        """
+        print('Correlation ID:', self.correlation_id.to_bytes(4, byteorder='big'))
+        message = bytearray(self.correlation_id.to_bytes(4, byteorder='big'))
+        message += int(0).to_bytes(4, byteorder='big')
+        message += TAG_BUFFER
+        print('Error Code: ', self.error_code, self.error_code.to_bytes(2, byteorder='big'))
+        message += self.error_code.to_bytes(2, byteorder='big')
+        message += self.session_id.to_bytes(4, byteorder='big')
+        print('Reqd Topics: ', len(self.reqd_topics))
+        message += int(0).to_bytes(1, byteorder='big')
+        for topic_id, partitions in self.reqd_topics.items():
+            message += topic_id
+            for part_dict in partitions:
+                message += part_dict['partition_index'].to_bytes(4, byteorder='big')
+                message += int(0).to_bytes(2, byteorder='big') # Error Code
+                message += int(0).to_bytes(8, byteorder='big') # High Watermark
+                message += int(0).to_bytes(8, byteorder='big') # Last Stable Offset
+                message += int(0).to_bytes(8, byteorder='big') # Log Start Offset
+                message += int(0).to_bytes(4, byteorder='big') # Aborted Trransactions Array Length
+                for topic in []:
+                    pass
+                message += int(0).to_bytes(4, byteorder='big') # Preferred Read Replica
+                message += int(0).to_bytes(1, byteorder='big') # Preferred Read Replica
+        message += TAG_BUFFER
+        message_len = len(message)
+        message_leng = bytearray(message_len.to_bytes(4, byteorder='big'))
+        print('message_leng:', message_len)
+        ret_message = message_leng + message
+        for i in range(0, len(ret_message), 4):
+            print(ret_message[i:i+4])
+        return ret_message
 
 class KafkaAPIVersionsResponse(KafkaResponse):
     API_KEY = 18
